@@ -9,14 +9,22 @@
 #include <netdb.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <sys/ipc.h> 
+#include <sys/shm.h> 
 
 #define MY_PORT "19999"
-static int pauseChild;
 
-void handleContinueSignal(int sig)
-{
-    pauseChild = 1; // Or some other handling code
+void setCall(char* call, char* sharedMem){
+    memcpy(sharedMem, call, sizeof(char));
 }
+
+void waitForCall(char* call, char* sharedMem){
+            while(1){
+            if(strcmp(sharedMem,call))
+                break;
+        }
+}
+
 int letterToNumber(char letter)
 {
     if (letter == 'A')
@@ -85,18 +93,46 @@ void setField(char *message, int playerPlayfield[4][4], int numOfFields)
     }
 }
 
+int sockfd, s, shmid;
+char *shared_mem;
+
+void clearAndExit(){
+        close(s);
+        close(sockfd);
+        shmdt(shared_mem);
+        shmctl(shmid, IPC_RMID, NULL);
+        printf("\nShutdown process..\n");
+        exit(0);
+}
+
+void exit_signal(int signo){
+    if(signo == SIGINT){
+        clearAndExit();
+    }
+        printf("Signal caught!");
+    return;
+}
+
 int main(int argc, char *argv[])
 {
     int playerPlayfield[4][4];
     memset(playerPlayfield, 0, sizeof(playerPlayfield[0][0]) * 16);
 
-    int sockfd, s;
+    key_t key = ftok("statki.c",65); 
+    // shmget returns an identifier in shmid 
+    shmid = shmget(key,1024,0666|IPC_CREAT); 
+    // shmat to attach to shared memory 
+    shared_mem = (char*) shmat(shmid,(void*)0,0); 
+
     struct addrinfo hints;
     struct addrinfo *result, *rp;
     char message[25];
-    pid_t PID;
+    pid_t PID,ppid;
+    ppid = getpid();
     PID = fork();
-    pauseChild = 0;
+    
+    setCall("pause",shared_mem);
+
     if (PID < 0)
     {
         fprintf(stderr, "fork(): error\n");
@@ -104,7 +140,6 @@ int main(int argc, char *argv[])
     }
     else if (PID == 0)
     {
-        signal(SIGCONT, handleContinueSignal);
         //ustawiamy dziecko na wysył komunikatów
         memset(&hints, 0, sizeof(struct addrinfo));
         hints.ai_family = AF_INET;
@@ -152,11 +187,18 @@ int main(int argc, char *argv[])
             strcpy(nickname, "NN");
         }
         printf("Rozpoczynam gre z %s. Napisz <koniec> by zakonczyc. Ustal polozenie swoich okretow:\n", inet_ntoa((struct in_addr)addr->sin_addr));
-        pause();
+        
+        waitForCall("unpause", shared_mem);
+        
         while (1)
         {
             //Pobieraj polecenia od użytkownika i dodaj nick jeśli został utworzony
             scanf("%s", message);
+            if(strcmp(message,"<koniec>")==0){
+                kill(ppid, SIGINT);
+                clearAndExit();
+            }
+
             strcat(message, "|");
             strcat(message, nickname);
 
@@ -170,6 +212,7 @@ int main(int argc, char *argv[])
     else
     {
         sleep(1);
+
         //ustawiamy rodzica na nasłuch komunikatów
         memset(&hints, 0, sizeof(struct addrinfo));
         hints.ai_family = AF_INET;
@@ -201,9 +244,6 @@ int main(int argc, char *argv[])
         }
 
         freeaddrinfo(result);
-
-        struct sockaddr_in from;
-        socklen_t len = sizeof(from);
         // ustawiamy statki
 
         // setField("1. jednomasztowiec: ", playerPlayfield, 1);
@@ -227,11 +267,10 @@ int main(int argc, char *argv[])
         //     printf("\n");
         // }
 
-        
-        // odblokowujemy wysył wiadomości
-        kill(PID, SIGCONT);
-        pauseChild = 0;
-
+        setCall("unpause",shared_mem);
+        signal(SIGINT,exit_signal);
+        struct sockaddr_in from;
+        socklen_t len = sizeof(from);
         while (1)
         {
             recvfrom(sockfd, &message, sizeof(message), 0, (struct sockaddr *)&from, &len);
