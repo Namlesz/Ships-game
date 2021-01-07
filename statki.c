@@ -12,22 +12,30 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 
+//definujemy port na którym będziemy pracować
 #define MY_PORT "19999"
 
-void setCall(char *call, char *sharedMem)
+//zmienne globalne które wymagają zamknięcia
+int sockfd, s, shmid;
+char *shared_mem;
+
+// ustawiamy komunikat w pamięci współdzielonej
+void setCall(char *call)
 {
-    memcpy(sharedMem, call, sizeof(char));
+    memcpy(shared_mem, call, 15);
 }
 
-void waitForCall(char *call, char *sharedMem)
+// czekamy na wskazany komunikat w pamięci współdzielonej
+void waitForCall(char *call)
 {
     while (1)
     {
-        if (strcmp(sharedMem, call))
+        if (strcmp(shared_mem, call) == 0)
             break;
     }
 }
 
+// zamieniamy znak na liczbę A->1, B->2, C->3, D->4
 int letterToNumber(char letter)
 {
     if (letter == 'A')
@@ -42,104 +50,142 @@ int letterToNumber(char letter)
         return -1;
 }
 
-int isNear(char *position, int playerPlayfield[4][4])
+// sprawdzamy czy pola bezpośrednio obok wskazanego, są zajęte
+int isNear(char *position, char playerPlayfield[4][4])
 {
     int a, b;
 
     b = position[1] - '0' - 1; //niezmienne
     a = letterToNumber(position[0]) - 1;
     if (a != -1)
-        if (playerPlayfield[a][b] == 1)
+        if (playerPlayfield[a][b] == '1')
             return 1;
 
     a = letterToNumber(position[0]) + 1;
     if (a != -1)
-        if (playerPlayfield[a][b] == 1)
+        if (playerPlayfield[a][b] == '1')
             return 1;
 
     a = letterToNumber(position[0]); //niezmienne
     b = position[1] - '0' - 2;
     if (a != -1 && b < 5)
-        if (playerPlayfield[a][b] == 1)
+        if (playerPlayfield[a][b] == '1')
             return 1;
 
     b = position[1] - '0';
     if (a != -1 && b < 5)
-        if (playerPlayfield[a][position[1] - '0' - 1] == 1)
+        if (playerPlayfield[a][b] == '1')
             return 1;
 
     return -1;
 }
 
-void setField(char *message, int playerPlayfield[4][4], int numOfFields)
+// waliduje i ustawia na wskazanym polu statek
+void setField(char *message, char playerPlayfield[4][4], int numOfFields)
 {
-    char position[100];
+    char position[15];
     int x, y; // x -> A; y -> 1
     printf("%s", message);
     scanf("%s", position);
-    while (strlen(position) > 2 || (x = letterToNumber(position[0])) == -1 || (y = position[1] - '0' - 1) > 4 || playerPlayfield[x][y] == 1 || isNear(position, playerPlayfield) != -1)
+    //sprawdzamy czy pole jest zajęte, czy dane są poprawnie wprowadzone i czy obok nie stoi już statek
+    while (strlen(position) > 2 || (x = letterToNumber(position[0])) == -1 || (y = position[1] - '0') > 4 || playerPlayfield[x][y] == '1' || isNear(position, playerPlayfield) != -1)
     {
         printf("---Bledne dane---\nZa maly odstep|zla liczba|zla cyfra|pole zajete\nWprowadz ponownie: ");
         scanf("%s", position);
     }
-    playerPlayfield[x][y] = 1;
+    y--;
+    playerPlayfield[x][y] = '1';
 
     //ustawiamy drugie pole z tą różnicą, że dwumasztowiec musi stać obok drugiego pola z 1 masztem
     if (numOfFields == 2)
     {
         scanf("%s", position);
-        while ((x = letterToNumber(position[0])) == -1 || (y = position[1] - '0' - 1) > 4 || playerPlayfield[x][y] == 1 || isNear(position, playerPlayfield) != 1)
+        while ((x = letterToNumber(position[0])) == -1 || (y = position[1] - '0') > 4 || playerPlayfield[x][y] == '1' || isNear(position, playerPlayfield) != 1)
         {
-            printf("Bledne pole lub zajete, wprowadz jeszcze raz: ");
+            printf("---Bledne dane---\nZa maly odstep|zla liczba|zla cyfra|pole zajete\nWprowadz ponownie: ");
             scanf("%s", position);
         }
-        playerPlayfield[x][y] = 1;
+        y--;
+        playerPlayfield[x][y] = '1';
     }
 }
 
-int sockfd, s, shmid;
-char *shared_mem;
+// przygotowujemy plansze do gry
+void setUpPlayground(char playerPlayfield[4][4]){
+        memset(playerPlayfield, ' ', sizeof(playerPlayfield[0][0]) * 16);
+        setField("1. jednomasztowiec: ", playerPlayfield, 1);
+        setField("2. jednomasztowiec: ", playerPlayfield, 1);
+        setField("3. dwumasztowiec: ", playerPlayfield, 2);
+}
 
+// wypisujemy wskazaną plansze
+void printPlayground(char playground[4][4]){
+        int i, j;
+        char tmp[4] = {'A', 'B', 'C', 'D'};
+        printf("\n.| ");
+
+        for(i=1;i<5;i++)
+            printf("%d ",i);
+
+        printf("\n-|--------\n");
+        
+        for (i = 0; i < 4; i++)
+        {
+            printf("%c| ", tmp[i]);
+            for (j = 0; j < 4; j++)
+            {
+                printf("%c ", playground[i][j]);
+            }
+            printf("\n");
+        }
+}
+
+// zamykamy deskryptory i wychodzimy z programu
 void clearAndExit()
 {
     close(s);
     close(sockfd);
     shmdt(shared_mem);
     shmctl(shmid, IPC_RMID, NULL);
-    printf("\nShutdown process..\n");
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
-void exit_signal(int signo)
+void sigHandler(int signo)
 {
     if (signo == SIGINT)
     {
         clearAndExit();
     }
-    printf("Signal caught!");
     return;
 }
 
 int main(int argc, char *argv[])
 {
-    int playerPlayfield[4][4];
-    memset(playerPlayfield, 0, sizeof(playerPlayfield[0][0]) * 16);
+    // tworzymy pamięc współdzieloną 
+    key_t key; ;
+    if ((key = ftok("statki.c", 65)) == -1) {
+        perror("ftok");
+        exit(1);
+    }
 
-    key_t key = ftok("statki.c", 65);
-    // shmget returns an identifier in shmid
-    shmid = shmget(key, 1024, 0666 | IPC_CREAT);
-    // shmat to attach to shared memory
+    if ((shmid = shmget(key, 1024, 0666 | IPC_CREAT)) == -1) {
+        perror("ftok");
+        exit(1);
+    }
     shared_mem = (char *)shmat(shmid, (void *)0, 0);
+    
+    // przechwytujemy sygnały
+    signal(SIGINT, sigHandler);
 
     struct addrinfo hints;
     struct addrinfo *result, *rp;
     char command[30];
+    
     pid_t PID, ppid;
     ppid = getpid();
     PID = fork();
-
-    setCall("pause", shared_mem);
-
+    //tworzymy dziecko, które odpowiada za komunikację z przeciwnikiem
+    //natomiast rodzic stale nasłuchuje i przetwarza odbierane dane
     if (PID < 0)
     {
         fprintf(stderr, "fork(): error\n");
@@ -194,9 +240,8 @@ int main(int argc, char *argv[])
             strcpy(nickname, "NN");
         }
         printf("Rozpoczynam gre z %s. Napisz <koniec> by zakonczyc. Ustal polozenie swoich okretow:\n", inet_ntoa((struct in_addr)addr->sin_addr));
-
-        waitForCall("unpause", shared_mem);
-        signal(SIGINT, exit_signal);
+        setCall("ready");
+        waitForCall("unpause");
 
         while (1)
         {
@@ -207,7 +252,8 @@ int main(int argc, char *argv[])
 
             if (strcmp(command, "t") == 0 || strcmp(command, "n") == 0)
             {
-                setCall(command, shared_mem);
+                setCall(command);
+                waitForCall("write");
             }
 
             char tmp[10];
@@ -231,7 +277,7 @@ int main(int argc, char *argv[])
     }
     else
     {
-        sleep(1);
+        char playerPlayfield[4][4];
 
         //ustawiamy rodzica na nasłuch komunikatów
         memset(&hints, 0, sizeof(struct addrinfo));
@@ -265,30 +311,13 @@ int main(int argc, char *argv[])
 
         freeaddrinfo(result);
         // ustawiamy statki
+        waitForCall("ready");
 
-        // setField("1. jednomasztowiec: ", playerPlayfield, 1);
-        // setField("2. jednomasztowiec: ", playerPlayfield, 1);
-        // setField("3. dwumasztowiec: ", playerPlayfield, 2);
+        setUpPlayground(playerPlayfield);
+        printf("TWOJE USTAWIENIE STATKÓW:");
+        printPlayground(playerPlayfield);
 
-        // int x, y;
-        // char tmp[4] = {'A', 'B', 'C', 'D'};
-        // printf("\n---");
-
-        // for(x=1;x<5;x++)
-        //     printf("%d ",x);
-        // printf("\n");
-        // for (x = 0; x < 4; x++)
-        // {
-        //     printf("%c  ", tmp[x]);
-        //     for (y = 0; y < 4; y++)
-        //     {
-        //         printf("%d ", playerPlayfield[x][y]);
-        //     }
-        //     printf("\n");
-        // }
-
-        setCall("unpause", shared_mem);
-        signal(SIGINT, exit_signal);
+        setCall("unpause");
         struct sockaddr_in from;
         socklen_t len = sizeof(from);
         while (1)
@@ -304,8 +333,10 @@ int main(int argc, char *argv[])
                 {
                     if (strcmp(shared_mem, "t") == 0)
                     {
-                        printf("Setting up again...\n");
-                        setCall("empty", shared_mem);
+                        setUpPlayground(playerPlayfield);
+                        printf("TWOJE USTAWIENIE STATKÓW:");
+                        printPlayground(playerPlayfield);
+                        setCall("write");
                         break;
                     }
                     else if (strcmp(shared_mem, "n") == 0)
@@ -321,9 +352,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    //wysyłamy wiadomość ready, i oczekujemy na wiadomość ready
-    //jeśli otrzymamy wiadomość ready, wysyłamy wiadmość start i rozpoczynamy
-    //jeśli otrzymamy wiadomość start, to rozpoczynamy
     wait(NULL);
     return 0;
 }
