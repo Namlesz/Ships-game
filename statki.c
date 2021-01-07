@@ -9,20 +9,23 @@
 #include <netdb.h>
 #include <sys/wait.h>
 #include <signal.h>
-#include <sys/ipc.h> 
-#include <sys/shm.h> 
+#include <sys/ipc.h>
+#include <sys/shm.h>
 
 #define MY_PORT "19999"
 
-void setCall(char* call, char* sharedMem){
+void setCall(char *call, char *sharedMem)
+{
     memcpy(sharedMem, call, sizeof(char));
 }
 
-void waitForCall(char* call, char* sharedMem){
-            while(1){
-            if(strcmp(sharedMem,call))
-                break;
-        }
+void waitForCall(char *call, char *sharedMem)
+{
+    while (1)
+    {
+        if (strcmp(sharedMem, call))
+            break;
+    }
 }
 
 int letterToNumber(char letter)
@@ -74,42 +77,46 @@ void setField(char *message, int playerPlayfield[4][4], int numOfFields)
     int x, y; // x -> A; y -> 1
     printf("%s", message);
     scanf("%s", position);
-    while (strlen(position)>2||(x = letterToNumber(position[0])) == -1 || (y = position[1] - '0' - 1) > 4 || playerPlayfield[x][y] == 1 || isNear(position, playerPlayfield) != -1)
+    while (strlen(position) > 2 || (x = letterToNumber(position[0])) == -1 || (y = position[1] - '0' - 1) > 4 || playerPlayfield[x][y] == 1 || isNear(position, playerPlayfield) != -1)
     {
         printf("---Bledne dane---\nZa maly odstep|zla liczba|zla cyfra|pole zajete\nWprowadz ponownie: ");
         scanf("%s", position);
     }
     playerPlayfield[x][y] = 1;
-    
+
     //ustawiamy drugie pole z tą różnicą, że dwumasztowiec musi stać obok drugiego pola z 1 masztem
-    if(numOfFields==2){
+    if (numOfFields == 2)
+    {
         scanf("%s", position);
         while ((x = letterToNumber(position[0])) == -1 || (y = position[1] - '0' - 1) > 4 || playerPlayfield[x][y] == 1 || isNear(position, playerPlayfield) != 1)
         {
             printf("Bledne pole lub zajete, wprowadz jeszcze raz: ");
             scanf("%s", position);
         }
-    playerPlayfield[x][y] = 1;
+        playerPlayfield[x][y] = 1;
     }
 }
 
 int sockfd, s, shmid;
 char *shared_mem;
 
-void clearAndExit(){
-        close(s);
-        close(sockfd);
-        shmdt(shared_mem);
-        shmctl(shmid, IPC_RMID, NULL);
-        printf("\nShutdown process..\n");
-        exit(0);
+void clearAndExit()
+{
+    close(s);
+    close(sockfd);
+    shmdt(shared_mem);
+    shmctl(shmid, IPC_RMID, NULL);
+    printf("\nShutdown process..\n");
+    exit(0);
 }
 
-void exit_signal(int signo){
-    if(signo == SIGINT){
+void exit_signal(int signo)
+{
+    if (signo == SIGINT)
+    {
         clearAndExit();
     }
-        printf("Signal caught!");
+    printf("Signal caught!");
     return;
 }
 
@@ -118,20 +125,20 @@ int main(int argc, char *argv[])
     int playerPlayfield[4][4];
     memset(playerPlayfield, 0, sizeof(playerPlayfield[0][0]) * 16);
 
-    key_t key = ftok("statki.c",65); 
-    // shmget returns an identifier in shmid 
-    shmid = shmget(key,1024,0666|IPC_CREAT); 
-    // shmat to attach to shared memory 
-    shared_mem = (char*) shmat(shmid,(void*)0,0); 
+    key_t key = ftok("statki.c", 65);
+    // shmget returns an identifier in shmid
+    shmid = shmget(key, 1024, 0666 | IPC_CREAT);
+    // shmat to attach to shared memory
+    shared_mem = (char *)shmat(shmid, (void *)0, 0);
 
     struct addrinfo hints;
     struct addrinfo *result, *rp;
-    char message[25];
-    pid_t PID,ppid;
+    char command[30];
+    pid_t PID, ppid;
     ppid = getpid();
     PID = fork();
-    
-    setCall("pause",shared_mem);
+
+    setCall("pause", shared_mem);
 
     if (PID < 0)
     {
@@ -187,24 +194,37 @@ int main(int argc, char *argv[])
             strcpy(nickname, "NN");
         }
         printf("Rozpoczynam gre z %s. Napisz <koniec> by zakonczyc. Ustal polozenie swoich okretow:\n", inet_ntoa((struct in_addr)addr->sin_addr));
-        
+
         waitForCall("unpause", shared_mem);
-        
+        signal(SIGINT, exit_signal);
+
         while (1)
         {
             //Pobieraj polecenia od użytkownika i dodaj nick jeśli został utworzony
-            scanf("%s", message);
-            if(strcmp(message,"<koniec>")==0){
+            memset(command, 0, sizeof(command));
+
+            scanf("%s", command);
+
+            if (strcmp(command, "t") == 0 || strcmp(command, "n") == 0)
+            {
+                setCall(command, shared_mem);
+            }
+
+            char tmp[10];
+            memcpy(tmp, command, 8);
+
+            strcat(command, "|");
+            strcat(command, nickname);
+
+            //wysyłamy dane do drugiego użytkownika
+            sendto(sockfd, &command, sizeof(command), 0,
+                   NULL, 0);
+
+            if (strcmp(tmp, "<koniec>") == 0)
+            {
                 kill(ppid, SIGINT);
                 clearAndExit();
             }
-
-            strcat(message, "|");
-            strcat(message, nickname);
-
-            //wysyłamy dane do drugiego użytkownika
-            sendto(sockfd, &message, sizeof(message), 0,
-                   NULL, 0);
         }
 
         // close(sockfd);
@@ -249,11 +269,11 @@ int main(int argc, char *argv[])
         // setField("1. jednomasztowiec: ", playerPlayfield, 1);
         // setField("2. jednomasztowiec: ", playerPlayfield, 1);
         // setField("3. dwumasztowiec: ", playerPlayfield, 2);
-        
+
         // int x, y;
         // char tmp[4] = {'A', 'B', 'C', 'D'};
         // printf("\n---");
-        
+
         // for(x=1;x<5;x++)
         //     printf("%d ",x);
         // printf("\n");
@@ -267,15 +287,37 @@ int main(int argc, char *argv[])
         //     printf("\n");
         // }
 
-        setCall("unpause",shared_mem);
-        signal(SIGINT,exit_signal);
+        setCall("unpause", shared_mem);
+        signal(SIGINT, exit_signal);
         struct sockaddr_in from;
         socklen_t len = sizeof(from);
         while (1)
         {
-            recvfrom(sockfd, &message, sizeof(message), 0, (struct sockaddr *)&from, &len);
+            recvfrom(sockfd, &command, sizeof(command), 0, (struct sockaddr *)&from, &len);
 
-            printf("[%s]: %s\n", inet_ntoa(from.sin_addr), message);
+            char *msg = strtok(command, "|");
+            char *nick = strtok(NULL, "|");
+            if (strcmp(msg, "<koniec>") == 0)
+            {
+                printf("[%s (%s) zakonczyl gre, czy chcesz przygotowac nowa plansze?(t/n)]\n", nick, inet_ntoa(from.sin_addr));
+                while (1)
+                {
+                    if (strcmp(shared_mem, "t") == 0)
+                    {
+                        printf("Setting up again...\n");
+                        setCall("empty", shared_mem);
+                        break;
+                    }
+                    else if (strcmp(shared_mem, "n") == 0)
+                    {
+                        kill(PID, SIGINT);
+                        clearAndExit();
+                    }
+                }
+                continue;
+            }
+
+            printf("[%s (%s): %s] \n", nick, inet_ntoa(from.sin_addr), msg);
         }
     }
 
