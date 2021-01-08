@@ -11,14 +11,16 @@
 #include <signal.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <time.h>
 
 //definujemy port na którym będziemy pracować
 #define MY_PORT "19999"
-
+#define FILE_NAME "statki.c"
 //zmienne globalne które wymagają zamknięcia
 int sockfd, s, shmid;
 char *shared_mem;
-
+char shootField[4][4];
+int indestructible;
 // ustawiamy komunikat w pamięci współdzielonej
 void setCall(char *call)
 {
@@ -111,33 +113,35 @@ void setField(char *message, char playerPlayfield[4][4], int numOfFields)
 }
 
 // przygotowujemy plansze do gry
-void setUpPlayground(char playerPlayfield[4][4]){
-        memset(playerPlayfield, ' ', sizeof(playerPlayfield[0][0]) * 16);
-        setField("1. jednomasztowiec: ", playerPlayfield, 1);
-        setField("2. jednomasztowiec: ", playerPlayfield, 1);
-        setField("3. dwumasztowiec: ", playerPlayfield, 2);
+void setUpPlayground(char playerPlayfield[4][4])
+{
+    memset(playerPlayfield, ' ', sizeof(playerPlayfield[0][0]) * 16);
+    setField("1. jednomasztowiec: ", playerPlayfield, 1);
+    setField("2. jednomasztowiec: ", playerPlayfield, 1);
+    setField("3. dwumasztowiec: ", playerPlayfield, 2);
 }
 
 // wypisujemy wskazaną plansze
-void printPlayground(char playground[4][4]){
-        int i, j;
-        char tmp[4] = {'A', 'B', 'C', 'D'};
-        printf("\n.| ");
+void printPlayground(char playground[4][4])
+{
+    int i, j;
+    char tmp[4] = {'A', 'B', 'C', 'D'};
+    printf("\n.| ");
 
-        for(i=1;i<5;i++)
-            printf("%d ",i);
+    for (i = 1; i < 5; i++)
+        printf("%d ", i);
 
-        printf("\n-|--------\n");
-        
-        for (i = 0; i < 4; i++)
+    printf("\n-|--------\n");
+
+    for (i = 0; i < 4; i++)
+    {
+        printf("%c| ", tmp[i]);
+        for (j = 0; j < 4; j++)
         {
-            printf("%c| ", tmp[i]);
-            for (j = 0; j < 4; j++)
-            {
-                printf("%c ", playground[i][j]);
-            }
-            printf("\n");
+            printf("%c ", playground[i][j]);
         }
+        printf("\n");
+    }
 }
 
 // zamykamy deskryptory i wychodzimy z programu
@@ -154,33 +158,48 @@ void sigHandler(int signo)
 {
     if (signo == SIGINT)
     {
-        clearAndExit();
+        if (strcmp(shared_mem, "wypisz") == 0)
+        {
+            printPlayground(shootField);
+            setCall("empty");
+        }
+        // else if(strcmp(shared_mem,"immune")==0){
+        //     immune=1;
+        //     setCall("empty");
+        // }
+        else
+            clearAndExit();
     }
     return;
 }
 
 int main(int argc, char *argv[])
 {
-    // tworzymy pamięc współdzieloną 
-    key_t key; ;
-    if ((key = ftok("statki.c", 65)) == -1) {
+    // tworzymy pamięc współdzieloną
+    key_t key;
+    ;
+    if ((key = ftok(FILE_NAME, 65)) == -1)
+    {
         perror("ftok");
         exit(1);
     }
 
-    if ((shmid = shmget(key, 1024, 0666 | IPC_CREAT)) == -1) {
+    if ((shmid = shmget(key, 1024, 0666 | IPC_CREAT)) == -1)
+    {
         perror("ftok");
         exit(1);
     }
     shared_mem = (char *)shmat(shmid, (void *)0, 0);
-    
     // przechwytujemy sygnały
     signal(SIGINT, sigHandler);
 
     struct addrinfo hints;
     struct addrinfo *result, *rp;
     char command[30];
-    
+
+    //Na razie plansza do której strzelamy jest pusta
+    memset(shootField, ' ', sizeof(shootField) * 16);
+
     pid_t PID, ppid;
     ppid = getpid();
     PID = fork();
@@ -239,9 +258,19 @@ int main(int argc, char *argv[])
         {
             strcpy(nickname, "NN");
         }
+
         printf("Rozpoczynam gre z %s. Napisz <koniec> by zakonczyc. Ustal polozenie swoich okretow:\n", inet_ntoa((struct in_addr)addr->sin_addr));
         setCall("ready");
         waitForCall("unpause");
+        //
+
+        printf("[Propozycja gry wysłana]\n");
+        memcpy(command, "start", sizeof("start"));
+        strcat(command, "|");
+        strcat(command, nickname);
+        sendto(sockfd, &command, sizeof(command), 0, NULL, 0);
+        time_t current_time = time(NULL);
+        sendto(sockfd, &current_time, sizeof(current_time), 0, NULL, 0);
 
         while (1)
         {
@@ -250,14 +279,35 @@ int main(int argc, char *argv[])
 
             scanf("%s", command);
 
-            if (strcmp(command, "t") == 0 || strcmp(command, "n") == 0)
+            //zabezpieczuc
+            if (strcmp(shared_mem, "newgame") == 0)
             {
+                while (strcmp(command, "t") && strcmp(command, "n"))
+                {
+                    printf("--Bledna wartosc--\n");
+                    memset(command, 0, sizeof(command));
+                    scanf("%s", command);
+                }
                 setCall(command);
                 waitForCall("write");
+                setCall("empty");
+                continue;
             }
-
-            char tmp[10];
-            memcpy(tmp, command, 8);
+            else if (strcmp(command, "wypisz") == 0)
+            {
+                setCall(command);
+                kill(ppid, SIGINT);
+                continue;
+            }
+            else if (strcmp(command, "<koniec>") == 0)
+            {
+                strcat(command, "|");
+                strcat(command, nickname);
+                sendto(sockfd, &command, sizeof(command), 0,
+                       NULL, 0);
+                kill(ppid, SIGINT);
+                clearAndExit();
+            }
 
             strcat(command, "|");
             strcat(command, nickname);
@@ -265,15 +315,7 @@ int main(int argc, char *argv[])
             //wysyłamy dane do drugiego użytkownika
             sendto(sockfd, &command, sizeof(command), 0,
                    NULL, 0);
-
-            if (strcmp(tmp, "<koniec>") == 0)
-            {
-                kill(ppid, SIGINT);
-                clearAndExit();
-            }
         }
-
-        // close(sockfd);
     }
     else
     {
@@ -314,20 +356,22 @@ int main(int argc, char *argv[])
         waitForCall("ready");
 
         setUpPlayground(playerPlayfield);
-        printf("TWOJE USTAWIENIE STATKÓW:");
+        printf("\nTWOJE USTAWIENIE STATKÓW:");
         printPlayground(playerPlayfield);
 
         setCall("unpause");
+        time_t ourTime = time(NULL);
         struct sockaddr_in from;
         socklen_t len = sizeof(from);
+        indestructible = 1;
         while (1)
         {
             recvfrom(sockfd, &command, sizeof(command), 0, (struct sockaddr *)&from, &len);
-
             char *msg = strtok(command, "|");
             char *nick = strtok(NULL, "|");
             if (strcmp(msg, "<koniec>") == 0)
             {
+                setCall("newgame");
                 printf("[%s (%s) zakonczyl gre, czy chcesz przygotowac nowa plansze?(t/n)]\n", nick, inet_ntoa(from.sin_addr));
                 while (1)
                 {
@@ -347,8 +391,28 @@ int main(int argc, char *argv[])
                 }
                 continue;
             }
+            else if (strcmp(msg, "start") == 0)
+            {
+                time_t rival_time;
+                recvfrom(sockfd, &rival_time, sizeof(rival_time), 0, (struct sockaddr *)&from, &len);
+                if(ourTime<rival_time){
+                    printf("[%s (%s) dolaczyl do gry, podal pole do strzalu]\n", nick, inet_ntoa(from.sin_addr));
+                }
+                indestructible = 0;
+            }
+            else
+            {
+                //komunikat 'trafiony'
+                //dodajemy do tablicy info
+                //odejmujemy ilosc statkow
+                //canSend=1;
 
-            printf("[%s (%s): %s] \n", nick, inet_ntoa(from.sin_addr), msg);
+                //komunikat 'nietrafiony'
+
+                //
+
+                //printf("[%s (%s): %s] \n", nick, inet_ntoa(from.sin_addr), msg);
+            }
         }
     }
 
