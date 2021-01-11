@@ -16,19 +16,19 @@
 //definujemy port na którym będziemy pracować
 #define MY_PORT "19999"
 #define FILE_NAME "statki.c"
-
+#define MSG_SIZE 50
 //zmienne globalne które wymagają zamknięcia
 int sockfd, s, shmid;
 char *shared_mem;
 char shootField[4][4];
 int isMyTurn;
-char command[30];
+char command[MSG_SIZE];
 
 // ustawiamy komunikat w pamięci współdzielonej
 void setCall(char *call)
 {
-    memset(shared_mem, 0, 30);
-    memcpy(shared_mem, call, 30);
+    memset(shared_mem, 0, MSG_SIZE);
+    memcpy(shared_mem, call, MSG_SIZE);
 }
 
 // czekamy na wskazany komunikat w pamięci współdzielonej
@@ -36,7 +36,8 @@ void waitForCall(char *call)
 {
     while (1)
     {
-        if (strcmp(shared_mem, call) == 0){
+        if (strcmp(shared_mem, call) == 0)
+        {
             setCall("EMPTY");
             break;
         }
@@ -89,19 +90,19 @@ int isNear(char *position, int playerPlayfield[4][4])
 }
 
 // waliduje i ustawia na wskazanym polu statek
-void setField(char *message, char playerShip[4][3], int id,  int playerPlayfield[4][4])
+void setField(char *message, char playerShip[4][3], int id, int playerPlayfield[4][4])
 {
-    char position[15]={};
+    char position[15] = {};
     int x, y; // x -> A; y -> 1
 
     int nearFlag;
-    if(id==3)
-        nearFlag=1;
+    if (id == 3)
+        nearFlag = 1;
     else
-        nearFlag=-1;
+        nearFlag = -1;
     printf("%s", message);
     scanf("%s", position);
-    
+
     //sprawdzamy czy pole jest zajęte, czy dane są poprawnie wprowadzone i czy obok nie stoi już statek
     while (strlen(position) > 2 || (x = letterToNumber(position[0])) == -1 || (y = position[1] - '0') > 4 || playerPlayfield[x][y] == 1 || isNear(position, playerPlayfield) != nearFlag)
     {
@@ -110,20 +111,20 @@ void setField(char *message, char playerShip[4][3], int id,  int playerPlayfield
     }
     y--;
     playerPlayfield[x][y] = 1;
-    memcpy(playerShip[id],position,sizeof(position));
+    memcpy(playerShip[id], position, sizeof(position));
 }
 
 // przygotowujemy plansze do gry
 void setUpPlayground(char playerShips[4][3])
-{   
+{
     int tmp[4][4];
     memset(tmp, 0, sizeof(tmp[0][0]) * 16);
     memset(playerShips, ' ', sizeof(playerShips[0][0]) * 8);
 
-    setField("1. jednomasztowiec: ", playerShips, 0,tmp);
-    setField("2. jednomasztowiec: ", playerShips, 1,tmp);
-    setField("3. dwumasztowiec: ", playerShips, 2,tmp);
-    setField("", playerShips, 3,tmp);
+    setField("1. jednomasztowiec: ", playerShips, 0, tmp);
+    setField("2. jednomasztowiec: ", playerShips, 1, tmp);
+    setField("3. dwumasztowiec: ", playerShips, 2, tmp);
+    setField("", playerShips, 3, tmp);
     //int k=0;
     // printf("start wypisania\n");
     // for(k=0;k<4;k++)
@@ -153,6 +154,11 @@ void printPlayground(char playground[4][4])
     }
 }
 
+void setShootField(char c, char *pos, char shootField[4][4])
+{
+    shootField[letterToNumber(pos[0])][pos[1] - '0' - 1] = c;
+}
+
 // zamykamy deskryptory i wychodzimy z programu
 void clearAndExit()
 {
@@ -167,24 +173,32 @@ void sigHandler(int signo)
 {
     if (signo == SIGINT)
     {
-        if (strcmp(shared_mem, "wypisz") == 0)
+        char *cmd = strtok(shared_mem, "|");
+        if (strcmp(cmd, "wypisz") == 0)
         {
             printPlayground(shootField);
         }
-        else if (strcmp(shared_mem, "myTurn") == 0)
+        else if (strcmp(cmd, "myTurn") == 0)
         {
-            isMyTurn=1;
+            isMyTurn = 1;
         }
-        else if(strcmp(strtok(shared_mem,"|"), "sendMsg") == 0){
-            char *tmp = strtok(NULL,"");
-            strcpy(command,tmp);
+        else if (strcmp(cmd, "sendMsg") == 0)
+        {
+            char *tmp = strtok(NULL, "");
+            strcpy(command, tmp);
             sendto(sockfd, &command, sizeof(command), 0,
-                       NULL, 0);
+                   NULL, 0);
         }
-        else{
+        else if (strcmp(cmd, "set") == 0)
+        {
+            char *tmp = strtok(NULL, "");
+            setShootField('x', tmp, shootField);
+        }
+        else
+        {
             clearAndExit();
         }
-        
+
         setCall("EMPTY");
     }
     return;
@@ -192,6 +206,11 @@ void sigHandler(int signo)
 
 int main(int argc, char *argv[])
 {
+    if (argc > 2 && strlen(argv[2]) > 10)
+    {
+        fprintf(stderr, "Maksymalna dlugosc nicku to 10\n");
+        exit(EXIT_FAILURE);
+    }
     // tworzymy pamięc współdzieloną
     key_t key;
     ;
@@ -268,7 +287,7 @@ int main(int argc, char *argv[])
         char nickname[10];
         if (argc > 2)
         {
-            strcpy(nickname, argv[2]);
+            strncpy(nickname, argv[2], 10);
         }
         else
         {
@@ -278,8 +297,8 @@ int main(int argc, char *argv[])
         printf("Rozpoczynam gre z %s. Napisz <koniec> by zakonczyc. Ustal polozenie swoich okretow:\n", inet_ntoa((struct in_addr)addr->sin_addr));
         setCall("ready");
         waitForCall("unpause");
-        
-        isMyTurn=0;
+
+        isMyTurn = 0;
         printf("[Propozycja gry wysłana]\n");
         memcpy(command, "start", sizeof("start"));
         strcat(command, "|");
@@ -323,10 +342,16 @@ int main(int argc, char *argv[])
                 kill(ppid, SIGINT);
                 clearAndExit();
             }
-            else if(letterToNumber(command[0])==-1 ||(command[1]-'0')>4){
+            else if (letterToNumber(command[0]) == -1 || (command[1] - '0') > 4)
+            {
                 printf("---Bledny komunikat---\n");
             }
-            else if(isMyTurn==1){
+            else if (isMyTurn == 1)
+            {
+                char cmd[20] = "set|";
+                strcat(cmd, command);
+                setCall(cmd);
+                kill(ppid, SIGINT);
 
                 strcat(command, "|");
                 strcat(command, nickname);
@@ -334,9 +359,10 @@ int main(int argc, char *argv[])
                 //wysyłamy dane do drugiego użytkownika
                 sendto(sockfd, &command, sizeof(command), 0,
                        NULL, 0);
-                isMyTurn=0;
+                isMyTurn = 0;
             }
-            else{
+            else
+            {
                 printf("---Czekaj na swoją ture---\n");
             }
         }
@@ -387,7 +413,7 @@ int main(int argc, char *argv[])
         time_t ourTime = time(NULL);
         struct sockaddr_in from;
         socklen_t len = sizeof(from);
-        int dwuMaszt=2, jednoMaszt=2;
+        int dwuMaszt = 2, jednoMaszt = 2, missed = 0;
         while (1)
         {
             recvfrom(sockfd, &command, sizeof(command), 0, (struct sockaddr *)&from, &len);
@@ -419,56 +445,96 @@ int main(int argc, char *argv[])
             {
                 time_t rival_time;
                 recvfrom(sockfd, &rival_time, sizeof(rival_time), 0, (struct sockaddr *)&from, &len);
-                if(ourTime<rival_time){
+                if (ourTime < rival_time)
+                {
                     printf("[%s (%s) dolaczyl do gry, podal pole do strzalu]\n", nick, inet_ntoa(from.sin_addr));
                     //wysylamy informacje do dziecka o mozliwosci przesylania informacji
+                    missed = 1;
                     setCall("myTurn");
                     kill(PID, SIGINT);
                 }
             }
-            else if (strcmp(msg, "trafiony") == 0){
-                printf("TRAFILES podaj kolejne pole\n");
+            else if (strcmp(msg, "trafiony") == 0)
+            {
+                missed = 1;
+                char *shipLen = nick;
+
+                if (strcmp(shipLen, "2") == 0)
+                    shipLen = "trafiles dwumasztowiec";
+                else if (strcmp(shipLen, "1") == 0)
+                    shipLen = "zatopiles jednomasztowiec";
+                else
+                    shipLen = "zatopiles dwumasztowiec";
+                char *pos = strtok(NULL, "|");
+                setShootField('Z', pos, shootField);
+                nick = strtok(NULL, "|");
+                printf("[%s (%s): %s, podaj kolejne pole]\n", nick, inet_ntoa(from.sin_addr), shipLen);
                 setCall("myTurn");
                 kill(PID, SIGINT);
                 continue;
             }
             else
             {
-                int i=0;
-                int hit=0;
-                //jednomasztowce   
-                for(i=0;i<2;i++){
-                    if(strcmp(msg,playerShips[i])==0){
+                int i = 0;
+                int hit = 0;
+                char *missMsg;
+                if (missed == 1)
+                    missMsg = "Pudlo, ";
+                else
+                    missMsg = "";
+                //jednomasztowce
+                for (i = 0; i < 2; i++)
+                {
+                    if (strcmp(msg, playerShips[i]) == 0)
+                    {
                         jednoMaszt--;
-                        //printf("TRAFIL 1 MASZTOWIEC\n");
-                        char tmp[]="sendMsg|trafiony|";
+                        printf("[%s%s (%s) strzela %s - jednomasztowiec zatopiony]\n", missMsg, nick, inet_ntoa(from.sin_addr), msg);
+                        char tmp[35] = "sendMsg|trafiony|1|";
+                        strcat(tmp, msg);
+                        strcat(tmp, "|");
                         strcat(tmp, nick);
                         setCall(tmp);
                         kill(PID, SIGINT);
-                        hit=1;
+                        hit = 1;
+                        missed = 0;
                     }
                 }
-                //dwumasztowce   
-                for(i=2;i<4;i++){
-                    if(strcmp(msg,playerShips[i])==0){
+                //dwumasztowce
+                for (i = 2; i < 4; i++)
+                {
+                    if (strcmp(msg, playerShips[i]) == 0)
+                    {
                         dwuMaszt--;
-                        //printf("TRAFIL 2 MASZTOWIEC\n");
-                        char tmp[] ="sendMsg|trafiony|";
+                        printf("[%s%s (%s) strzela %s ", missMsg, nick, inet_ntoa(from.sin_addr), msg);
+                        char tmp[35] = "sendMsg|trafiony|";
+                        if (dwuMaszt <= 0)
+                        {
+                            printf("- dwumasztowiec zatopiony]\n");
+                            strcat(tmp, "2-|");
+                        }
+                        else
+                        {
+                            printf("- dwumasztowiec trafiony]\n");
+                            strcat(tmp, "2|");
+                        }
+                        strcat(tmp, msg);
+                        strcat(tmp, "|");
                         strcat(tmp, nick);
                         setCall(tmp);
                         kill(PID, SIGINT);
-                        hit=1;
+                        hit = 1;
+                        missed = 0;
                     }
                 }
 
-                if(hit==0){
-                    printf("pudlo, teraz ty\n");
+                if (hit == 0)
+                {
+                    printf("[%s (%s) strzela %s pudlo, podaj pole do strzalu]\n", nick, inet_ntoa(from.sin_addr), msg);
                     setCall("myTurn");
                     kill(PID, SIGINT);
                 }
-                else if(dwuMaszt==0&&jednoMaszt==0)
+                else if (dwuMaszt <= 0 && jednoMaszt <= 0)
                     printf("KONIEC GRY\n");
-
 
                 //printf("[%s (%s): %s] \n", nick, inet_ntoa(from.sin_addr), msg);
             }
