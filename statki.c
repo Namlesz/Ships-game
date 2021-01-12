@@ -18,6 +18,7 @@
 #define FILE_NAME "statki.c"
 #define MSG_SIZE 50
 //zmienne globalne które wymagają zamknięcia
+
 int sockfd, s, shmid;
 char *shared_mem;
 char shootField[4][4];
@@ -106,7 +107,7 @@ void setField(char *message, char playerShip[4][3], int id, int playerPlayfield[
     //sprawdzamy czy pole jest zajęte, czy dane są poprawnie wprowadzone i czy obok nie stoi już statek
     while (strlen(position) > 2 || (x = letterToNumber(position[0])) == -1 || (y = position[1] - '0') > 4 || playerPlayfield[x][y] == 1 || isNear(position, playerPlayfield) != nearFlag)
     {
-        printf("---Bledne dane---\nZa maly odstep|zla liczba|zla cyfra|pole zajete\nWprowadz ponownie: ");
+        printf("---Bledne dane---\n---Za maly odstep|zla liczba|zla cyfra|pole zajete---\nWprowadz ponownie: ");
         scanf("%s", position);
     }
     y--;
@@ -120,15 +121,13 @@ void setUpPlayground(char playerShips[4][3])
     int tmp[4][4];
     memset(tmp, 0, sizeof(tmp[0][0]) * 16);
     memset(playerShips, ' ', sizeof(playerShips[0][0]) * 8);
+    //Na razie plansza do której strzelamy jest pusta
+    memset(shootField, ' ', sizeof(shootField[0][0]) * 16);
 
     setField("1. jednomasztowiec: ", playerShips, 0, tmp);
     setField("2. jednomasztowiec: ", playerShips, 1, tmp);
     setField("3. dwumasztowiec: ", playerShips, 2, tmp);
     setField("", playerShips, 3, tmp);
-    //int k=0;
-    // printf("start wypisania\n");
-    // for(k=0;k<4;k++)
-    //     printf("%d - %s\n",k,playerShips[k]);
 }
 
 // wypisujemy wskazaną plansze
@@ -154,6 +153,7 @@ void printPlayground(char playground[4][4])
     }
 }
 
+// ustawiamy wskazane pole na wskazany znak
 void setShootField(char c, char *pos, char shootField[4][4])
 {
     shootField[letterToNumber(pos[0])][pos[1] - '0' - 1] = c;
@@ -169,6 +169,41 @@ void clearAndExit()
     exit(EXIT_SUCCESS);
 }
 
+// tworzymy nową gre
+void newGame(pid_t PID, char playerShips[4][3], time_t * ourTime)
+{
+    setCall("newgame");
+    while (1)
+    {
+        sleep(0.5);
+        if (strcmp(shared_mem, "t") == 0)
+        {
+            setUpPlayground(playerShips);
+            *ourTime = time(NULL);
+            setCall("write");
+            break;
+        }
+        else if (strcmp(shared_mem, "n") == 0)
+        {
+            kill(PID, SIGINT);
+            clearAndExit();
+        }
+    }
+    
+}
+
+// wysylamy informacje o rozpoczaciu rozgrywki
+void sendStartFrame(char *nickname)
+{
+    printf("[Propozycja gry wysłana]\n");
+    memcpy(command, "start", sizeof("start"));
+    strcat(strcat(command, "|"), nickname);
+    sendto(sockfd, &command, sizeof(command), 0, NULL, 0);
+    time_t current_time = time(NULL);
+    sendto(sockfd, &current_time, sizeof(current_time), 0, NULL, 0);
+}
+
+// przechwytujemy odpowiednie sygnały i przetwarzamy je
 void sigHandler(int signo)
 {
     if (signo == SIGINT)
@@ -232,9 +267,6 @@ int main(int argc, char *argv[])
     struct addrinfo hints;
     struct addrinfo *result, *rp;
 
-    //Na razie plansza do której strzelamy jest pusta
-    memset(shootField, ' ', sizeof(shootField) * 16);
-
     pid_t PID, ppid;
     ppid = getpid();
     PID = fork();
@@ -286,33 +318,22 @@ int main(int argc, char *argv[])
 
         char nickname[10];
         if (argc > 2)
-        {
             strncpy(nickname, argv[2], 10);
-        }
         else
-        {
             strcpy(nickname, "NN");
-        }
 
         printf("Rozpoczynam gre z %s. Napisz <koniec> by zakonczyc. Ustal polozenie swoich okretow:\n", inet_ntoa((struct in_addr)addr->sin_addr));
         setCall("ready");
         waitForCall("unpause");
-
+        sendStartFrame(nickname);
         isMyTurn = 0;
-        printf("[Propozycja gry wysłana]\n");
-        memcpy(command, "start", sizeof("start"));
-        strcat(command, "|");
-        strcat(command, nickname);
-        sendto(sockfd, &command, sizeof(command), 0, NULL, 0);
-        time_t current_time = time(NULL);
-        sendto(sockfd, &current_time, sizeof(current_time), 0, NULL, 0);
+
         while (1)
         {
             //Pobieraj polecenia od użytkownika i dodaj nick jeśli został utworzony
             memset(command, 0, sizeof(command));
 
             scanf("%s", command);
-
             if (strcmp(shared_mem, "newgame") == 0)
             {
                 while (strcmp(command, "t") && strcmp(command, "n"))
@@ -321,10 +342,10 @@ int main(int argc, char *argv[])
                     memset(command, 0, sizeof(command));
                     scanf("%s", command);
                 }
+                sleep(0.5);
                 setCall(command);
                 waitForCall("write");
-                printf("[Propozycja gry wysłana]\n");
-                continue;
+                sendStartFrame(nickname);
             }
             else if (strcmp(command, "wypisz") == 0)
             {
@@ -335,8 +356,7 @@ int main(int argc, char *argv[])
             else if (strcmp(command, "<koniec>") == 0)
             {
                 setCall("end");
-                strcat(command, "|");
-                strcat(command, nickname);
+                strcat(strcat(command, "|"), nickname);
                 sendto(sockfd, &command, sizeof(command), 0,
                        NULL, 0);
                 kill(ppid, SIGINT);
@@ -353,8 +373,7 @@ int main(int argc, char *argv[])
                 setCall(cmd);
                 kill(ppid, SIGINT);
 
-                strcat(command, "|");
-                strcat(command, nickname);
+                strcat(strcat(command, "|"), nickname);
 
                 //wysyłamy dane do drugiego użytkownika
                 sendto(sockfd, &command, sizeof(command), 0,
@@ -405,40 +424,32 @@ int main(int argc, char *argv[])
         waitForCall("ready");
 
         char playerShips[4][3];
-
         setUpPlayground(playerShips);
 
         setCall("unpause");
         sleep(0.5);
+        
         time_t ourTime = time(NULL);
         struct sockaddr_in from;
         socklen_t len = sizeof(from);
-        int dwuMaszt = 2, jednoMaszt = 2, missed = 0;
+        int doublebShips = 2, singleShip = 2;
+        int missed = 0;
         while (1)
         {
             recvfrom(sockfd, &command, sizeof(command), 0, (struct sockaddr *)&from, &len);
-            //printf("DOSTALEM: %s\n",command);
             char *msg = strtok(command, "|");
             char *nick = strtok(NULL, "|");
-            //printf("[%s (%s): %s] \n", nick, inet_ntoa(from.sin_addr), msg);
-            if (strcmp(msg, "<koniec>") == 0)
+            if (strcmp(msg, "<koniec>") == 0 || strcmp(msg, "win") == 0)
             {
-                setCall("newgame");
-                printf("[%s (%s) zakonczyl gre, czy chcesz przygotowac nowa plansze?(t/n)]\n", nick, inet_ntoa(from.sin_addr));
-                while (1)
-                {
-                    if (strcmp(shared_mem, "t") == 0)
-                    {
-                        setUpPlayground(playerShips);
-                        setCall("write");
-                        break;
-                    }
-                    else if (strcmp(shared_mem, "n") == 0)
-                    {
-                        kill(PID, SIGINT);
-                        clearAndExit();
-                    }
-                }
+                doublebShips = 2;
+                singleShip = 2;
+                missed = 0;
+                if(strcmp(msg, "<koniec>") == 0 )
+                    printf("[%s (%s) zakonczyl gre, czy chcesz przygotowac nowa plansze?(t/n)]\n", nick, inet_ntoa(from.sin_addr));
+                else
+                    printf("[Wygrales z %s (%s), czy chcesz przygotowac nowa plansze?(t/n)]\n", nick, inet_ntoa(from.sin_addr));
+                
+                newGame(PID, playerShips, &ourTime);
                 continue;
             }
             else if (strcmp(msg, "start") == 0)
@@ -448,7 +459,6 @@ int main(int argc, char *argv[])
                 if (ourTime < rival_time)
                 {
                     printf("[%s (%s) dolaczyl do gry, podal pole do strzalu]\n", nick, inet_ntoa(from.sin_addr));
-                    //wysylamy informacje do dziecka o mozliwosci przesylania informacji
                     missed = 1;
                     setCall("myTurn");
                     kill(PID, SIGINT);
@@ -487,12 +497,10 @@ int main(int argc, char *argv[])
                 {
                     if (strcmp(msg, playerShips[i]) == 0)
                     {
-                        jednoMaszt--;
+                        singleShip--;
                         printf("[%s%s (%s) strzela %s - jednomasztowiec zatopiony]\n", missMsg, nick, inet_ntoa(from.sin_addr), msg);
                         char tmp[35] = "sendMsg|trafiony|1|";
-                        strcat(tmp, msg);
-                        strcat(tmp, "|");
-                        strcat(tmp, nick);
+                        strcat(strcat(strcat(tmp, msg), "|"), nick);
                         setCall(tmp);
                         kill(PID, SIGINT);
                         hit = 1;
@@ -504,10 +512,10 @@ int main(int argc, char *argv[])
                 {
                     if (strcmp(msg, playerShips[i]) == 0)
                     {
-                        dwuMaszt--;
+                        doublebShips--;
                         printf("[%s%s (%s) strzela %s ", missMsg, nick, inet_ntoa(from.sin_addr), msg);
                         char tmp[35] = "sendMsg|trafiony|";
-                        if (dwuMaszt <= 0)
+                        if (doublebShips <= 0)
                         {
                             printf("- dwumasztowiec zatopiony]\n");
                             strcat(tmp, "2-|");
@@ -517,9 +525,7 @@ int main(int argc, char *argv[])
                             printf("- dwumasztowiec trafiony]\n");
                             strcat(tmp, "2|");
                         }
-                        strcat(tmp, msg);
-                        strcat(tmp, "|");
-                        strcat(tmp, nick);
+                        strcat(strcat(strcat(tmp, msg), "|"), nick);
                         setCall(tmp);
                         kill(PID, SIGINT);
                         hit = 1;
@@ -533,10 +539,21 @@ int main(int argc, char *argv[])
                     setCall("myTurn");
                     kill(PID, SIGINT);
                 }
-                else if (dwuMaszt <= 0 && jednoMaszt <= 0)
-                    printf("KONIEC GRY\n");
+                else if (doublebShips <= 0 && singleShip <= 0)
+                {
+                    sleep(1);
+                    char tmp[35] = "sendMsg|win|";
+                    strcat(tmp, nick);
+                    setCall(tmp);
+                    kill(PID, SIGINT);
 
-                //printf("[%s (%s): %s] \n", nick, inet_ntoa(from.sin_addr), msg);
+                    printf("[Przegrales z %s (%s), czy chcesz przygotowac nowa plansze?(t/n)]\n", nick, inet_ntoa(from.sin_addr));
+                    sleep(1.5);
+                    doublebShips = 2;
+                    singleShip = 2;
+                    missed = 0;
+                    newGame(PID, playerShips, &ourTime);
+                }
             }
         }
     }
